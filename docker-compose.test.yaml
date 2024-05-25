@@ -7,6 +7,8 @@ services:
       dockerfile: Dockerfile.test
     networks:
       - servers
+    environment:
+      - BALANCER_HOST=balancer
     depends_on:
       - server1
       - server2

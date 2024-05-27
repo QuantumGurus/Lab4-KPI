@@ -1,0 +1,25 @@
+name: Build and run unit and integration tests
+
+on:
+  push:
+    branches: main
+  pull_request:
+    branches: main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v3
+
+      - name: Configure Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Build Docker images
+        run: docker-compose build
+
+      - name: Build and run integration tests
+        run: |
+          docker-compose -f docker-compose.yml -f docker-compose.test.yml up --exit-code-from test

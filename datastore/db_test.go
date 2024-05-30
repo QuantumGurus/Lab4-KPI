@@ -14,19 +14,19 @@ func TestDb_Put(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	db, err := NewDb(dir)
+	db, err := NewDatabase(dir, 45)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
 	pairs := [][]string{
-		{"key1", "value1"},
-		{"key2", "value2"},
-		{"key3", "value3"},
+		{"1", "v1"},
+		{"2", "v2"},
+		{"3", "v3"},
 	}
 
-	outFile, err := os.Open(filepath.Join(dir, outFileName))
+	outFile, err := os.Open(filepath.Join(dir, defaultFileName+"0"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestDb_Put(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if size1*2 != outInfo.Size() {
+		if size1 != outInfo.Size() {
 			t.Errorf("Unexpected size (%d vs %d)", size1, outInfo.Size())
 		}
 	})
@@ -73,7 +73,7 @@ func TestDb_Put(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		db, err = NewDb(dir)
+		db, err = NewDatabase(dir, 45)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,5 +88,4 @@ func TestDb_Put(t *testing.T) {
 			}
 		}
 	})
-
 }

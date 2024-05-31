@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDb_Put(t *testing.T) {
@@ -86,6 +87,72 @@ func TestDb_Put(t *testing.T) {
 			if value != pair[1] {
 				t.Errorf("Bad value returned expected %s, got %s", pair[1], value)
 			}
+		}
+	})
+}
+
+func TestDb_Segmentation(t *testing.T) {
+	tempDirectory, err := ioutil.TempDir("", "testDBDir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDirectory)
+
+	dbInstance, err := NewDatabase(tempDirectory, 35)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbInstance.Close()
+
+	t.Run("verify segment creation", func(t *testing.T) {
+		dbInstance.Put("1", "val1")
+		dbInstance.Put("2", "val2")
+		dbInstance.Put("3", "val3")
+		dbInstance.Put("2", "val5")
+		actualSegmentCount := len(dbInstance.segments)
+		expectedSegmentCount := 2
+		if actualSegmentCount != expectedSegmentCount {
+			t.Errorf("Segmentation error. Expected 2 segments, but got %d.", actualSegmentCount)
+		}
+	})
+
+	t.Run("verify segment initiation", func(t *testing.T) {
+		dbInstance.Put("4", "val4")
+		initialSegmentCount := len(dbInstance.segments)
+		expectedInitialCount := 3
+		if initialSegmentCount != expectedInitialCount {
+			t.Errorf("Segmentation error. Expected 3 segments, but got %d.", initialSegmentCount)
+		}
+
+		time.Sleep(2 * time.Second)
+
+		finalSegmentCount := len(dbInstance.segments)
+		expectedFinalCount := 2
+		if finalSegmentCount != expectedFinalCount {
+			t.Errorf("Segmentation error. Expected 2 segments after compaction, but got %d.", finalSegmentCount)
+		}
+	})
+
+	t.Run("verify duplicate key handling", func(t *testing.T) {
+		actualValue, _ := dbInstance.Get("2")
+		expectedValue := "val5"
+		if actualValue != expectedValue {
+			t.Errorf("Segmentation error. Expected value: %s, but got: %s", expectedValue, actualValue)
+		}
+	})
+
+	t.Run("verify segment file size", func(t *testing.T) {
+		file, err := os.Open(dbInstance.segments[0].filePath)
+		defer file.Close()
+
+		if err != nil {
+			t.Error(err)
+		}
+		fileInfo, _ := file.Stat()
+		actualSize := fileInfo.Size()
+		expectedSize := int64(51)
+		if actualSize != expectedSize {
+			t.Errorf("Segmentation error. Expected size %d, but got %d", expectedSize, actualSize)
 		}
 	})
 }

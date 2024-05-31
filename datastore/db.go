@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 const defaultFileName = "current-data"
@@ -16,6 +17,22 @@ var ErrNotFound = fmt.Errorf("record does not exist")
 
 type hashIndex map[string]int64
 
+type IndexAction struct {
+	isInsert  bool
+	recordKey string
+	offset    int64
+}
+
+type KeyPosition struct {
+	chunk    *Segment
+	location int64
+}
+
+type EntryWithChan struct {
+	entry  entry
+	result chan error
+}
+
 type Db struct {
 	out              *os.File
 	outPath          string
@@ -23,8 +40,10 @@ type Db struct {
 	directory        string
 	segmentSize      int64
 	lastSegmentIndex int
+	indexOps         chan IndexAction
+	keyPositions     chan *KeyPosition
+	putOps           chan EntryWithChan
 
-	index    hashIndex
 	segments []*Segment
 }
 
@@ -33,6 +52,7 @@ type Segment struct {
 
 	index    hashIndex
 	filePath string
+	mu       sync.Mutex
 }
 
 func NewDatabase(directory string, segmentSize int64) (*Db, error) {
@@ -40,6 +60,9 @@ func NewDatabase(directory string, segmentSize int64) (*Db, error) {
 		directory:        directory,
 		segmentSize:      segmentSize,
 		segments:         []*Segment{},
+		indexOps:         make(chan IndexAction),
+		keyPositions:     make(chan *KeyPosition),
+		putOps:           make(chan EntryWithChan),
 		lastSegmentIndex: 0,
 	}
 
@@ -50,6 +73,9 @@ func NewDatabase(directory string, segmentSize int64) (*Db, error) {
 	if err := db.Recover(); err != nil && err != io.EOF {
 		return nil, err
 	}
+
+	db.InitiateIndexProcessor()
+	db.InitiateEntryProcessor()
 
 	return db, nil
 }
@@ -106,6 +132,7 @@ func (db *Db) PerformOldSegmentsCompaction() {
 
 		for i := 0; i <= lastSegmentIdx; i++ {
 			currentSegment := db.segments[i]
+			currentSegment.mu.Lock()
 
 			for key, pos := range currentSegment.index {
 				if i < lastSegmentIdx && IsKeyInNewerSegments(db.segments[i+1:lastSegmentIdx+1], key) {
@@ -123,6 +150,7 @@ func (db *Db) PerformOldSegmentsCompaction() {
 					offset += int64(n)
 				}
 			}
+			currentSegment.mu.Unlock()
 		}
 
 		db.segments = []*Segment{newSegment, db.GetLastDataSegment()}
@@ -131,9 +159,13 @@ func (db *Db) PerformOldSegmentsCompaction() {
 
 func IsKeyInNewerSegments(segments []*Segment, key string) bool {
 	for _, segment := range segments {
+		segment.mu.Lock()
+
 		if _, exists := segment.index[key]; exists {
+			segment.mu.Unlock()
 			return true
 		}
+		segment.mu.Unlock()
 	}
 	return false
 }
@@ -179,6 +211,9 @@ func (db *Db) Recover() error {
 }
 
 func (db *Db) SetStorageKey(key string, size int64) {
+	db.GetLastDataSegment().mu.Lock()
+	defer db.GetLastDataSegment().mu.Unlock()
+
 	lastSegment := db.GetLastDataSegment()
 	lastSegment.index[key] = db.outOffset
 	db.outOffset += size
@@ -187,9 +222,13 @@ func (db *Db) SetStorageKey(key string, size int64) {
 func (db *Db) GetDataSegmentAndPosition(key string) (*Segment, int64, error) {
 	for i := len(db.segments) - 1; i >= 0; i-- {
 		segment := db.segments[i]
+		segment.mu.Lock()
+
 		if pos, found := segment.index[key]; found {
+			segment.mu.Unlock()
 			return segment, pos, nil
 		}
+		segment.mu.Unlock()
 	}
 	return nil, 0, ErrNotFound
 }
@@ -219,35 +258,86 @@ func (s *Segment) GetFromDataSegment(position int64) (string, error) {
 }
 
 func (db *Db) Get(key string) (string, error) {
-	if segment, position, err := db.GetDataSegmentAndPosition(key); err == nil {
-		return segment.GetFromDataSegment(position)
-	} else {
+	keyLocation := db.FindKeyPosition(key)
+	if keyLocation == nil {
+		return "", ErrNotFound
+	}
+	value, err := keyLocation.chunk.GetFromDataSegment(keyLocation.location)
+	if err != nil {
 		return "", err
 	}
+	return value, nil
 }
 
 func (db *Db) Put(key, value string) error {
-	entry := entry{
+	e := entry{
 		key:   key,
 		value: value,
 	}
-	entrySize := entry.GetLength()
-
-	fileInfo, err := db.out.Stat()
-	if err != nil {
-		return err
+	result := make(chan error)
+	db.putOps <- EntryWithChan{
+		entry:  e,
+		result: result,
 	}
-	if fileInfo.Size()+entrySize > db.segmentSize {
-		if err := db.CreateDataSegment(); err != nil {
-			return err
+	return <-result
+}
+
+func (db *Db) InitiateIndexProcessor() {
+	go func() {
+		for {
+			logEntry := <-db.indexOps
+			if logEntry.isInsert {
+				db.SetStorageKey(logEntry.recordKey, logEntry.offset)
+			} else {
+				segment, location, err := db.GetDataSegmentAndPosition(logEntry.recordKey)
+				if err != nil {
+					db.keyPositions <- nil
+				} else {
+					db.keyPositions <- &KeyPosition{
+						chunk:    segment,
+						location: location,
+					}
+				}
+			}
 		}
-	}
+	}()
+}
 
-	bytesWritten, err := db.out.Write(entry.Encode())
-	if err != nil {
-		return err
+func (db *Db) FindKeyPosition(key string) *KeyPosition {
+	action := IndexAction{
+		isInsert:  false,
+		recordKey: key,
 	}
-	db.SetStorageKey(entry.key, int64(bytesWritten))
+	db.indexOps <- action
+	return <-db.keyPositions
+}
 
-	return nil
+func (db *Db) InitiateEntryProcessor() {
+	go func() {
+		for {
+			entry := <-db.putOps
+			entryLength := entry.entry.GetLength()
+			fileInfo, err := db.out.Stat()
+			if err != nil {
+				entry.result <- err
+				continue
+			}
+			if fileInfo.Size()+entryLength > db.segmentSize {
+				err := db.CreateDataSegment()
+				if err != nil {
+					entry.result <- err
+					continue
+				}
+			}
+			bytesWritten, err := db.out.Write(entry.entry.Encode())
+			if err == nil {
+				db.indexOps <- IndexAction{
+					isInsert:  true,
+					recordKey: entry.entry.key,
+					offset:    int64(bytesWritten),
+				}
+			}
+			entry.result <- nil
+		}
+	}()
 }

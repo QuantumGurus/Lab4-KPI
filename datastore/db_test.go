@@ -104,7 +104,7 @@ func TestDb_Segmentation(t *testing.T) {
 	}
 	defer dbInstance.Close()
 
-	t.Run("verify segment creation", func(t *testing.T) {
+	t.Run("verify chunk creation", func(t *testing.T) {
 		dbInstance.Put("1", "val1")
 		dbInstance.Put("2", "val2")
 		dbInstance.Put("3", "val3")
@@ -116,7 +116,7 @@ func TestDb_Segmentation(t *testing.T) {
 		}
 	})
 
-	t.Run("verify segment initiation", func(t *testing.T) {
+	t.Run("verify chunk initiation", func(t *testing.T) {
 		dbInstance.Put("4", "val4")
 		initialSegmentCount := len(dbInstance.segments)
 		expectedInitialCount := 3
@@ -133,7 +133,7 @@ func TestDb_Segmentation(t *testing.T) {
 		}
 	})
 
-	t.Run("verify duplicate key handling", func(t *testing.T) {
+	t.Run("verify duplicate recordKey handling", func(t *testing.T) {
 		actualValue, _ := dbInstance.Get("2")
 		expectedValue := "val5"
 		if actualValue != expectedValue {
@@ -141,7 +141,7 @@ func TestDb_Segmentation(t *testing.T) {
 		}
 	})
 
-	t.Run("verify segment file size", func(t *testing.T) {
+	t.Run("verify chunk file size", func(t *testing.T) {
 		file, err := os.Open(dbInstance.segments[0].filePath)
 		defer file.Close()
 

@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -155,4 +156,44 @@ func TestDb_Segmentation(t *testing.T) {
 			t.Errorf("Segmentation error. Expected size %d, but got %d", expectedSize, actualSize)
 		}
 	})
+}
+
+func TestDb_ConcurrentGets(t *testing.T) {
+	dir, err := ioutil.TempDir("", "test-db-concurrent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	db, err := NewDatabase(dir, 45)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Додамо тестові дані
+	keysValues := map[string]string{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": "value3",
+	}
+	for k, v := range keysValues {
+		if err := db.Put(k, v); err != nil {
+			t.Fatalf("Failed to put %s: %s", k, err)
+		}
+	}
+
+	// Запустимо паралельні запити
+	var wg sync.WaitGroup
+	for k, expectedValue := range keysValues {
+		wg.Add(1)
+		go func(key, expected string) {
+			defer wg.Done()
+			value, err := db.Get(key)
+			if err != nil || value != expected {
+				t.Errorf("Failed to get %s: expected %s, got %s (err: %v)", key, expected, value, err)
+			}
+		}(k, expectedValue)
+	}
+	wg.Wait()
 }

@@ -33,6 +33,16 @@ type EntryWithChan struct {
 	result chan error
 }
 
+type readRequest struct {
+	key      string
+	response chan readResponse
+}
+
+type readResponse struct {
+	value string
+	err   error
+}
+
 type Db struct {
 	out              *os.File
 	outPath          string
@@ -43,6 +53,7 @@ type Db struct {
 	indexOps         chan IndexAction
 	keyPositions     chan *KeyPosition
 	putOps           chan EntryWithChan
+	readOps          chan readRequest
 
 	segments []*Segment
 }
@@ -63,6 +74,7 @@ func NewDatabase(directory string, segmentSize int64) (*Db, error) {
 		indexOps:         make(chan IndexAction),
 		keyPositions:     make(chan *KeyPosition),
 		putOps:           make(chan EntryWithChan),
+		readOps:          make(chan readRequest),
 		lastSegmentIndex: 0,
 	}
 
@@ -76,6 +88,7 @@ func NewDatabase(directory string, segmentSize int64) (*Db, error) {
 
 	db.InitiateIndexProcessor()
 	db.InitiateEntryProcessor()
+	db.InitiateReadWorkers(10) // 10 - кількість worker-рутину
 
 	return db, nil
 }
@@ -258,15 +271,13 @@ func (s *Segment) GetFromDataSegment(position int64) (string, error) {
 }
 
 func (db *Db) Get(key string) (string, error) {
-	keyLocation := db.FindKeyPosition(key)
-	if keyLocation == nil {
-		return "", ErrNotFound
+	responseChan := make(chan readResponse)
+	db.readOps <- readRequest{
+		key:      key,
+		response: responseChan,
 	}
-	value, err := keyLocation.chunk.GetFromDataSegment(keyLocation.location)
-	if err != nil {
-		return "", err
-	}
-	return value, nil
+	response := <-responseChan
+	return response.value, response.err
 }
 
 func (db *Db) Put(key, value string) error {
@@ -340,4 +351,20 @@ func (db *Db) InitiateEntryProcessor() {
 			entry.result <- nil
 		}
 	}()
+}
+
+func (db *Db) InitiateReadWorkers(workerCount int) {
+	for i := 0; i < workerCount; i++ {
+		go func() {
+			for req := range db.readOps {
+				keyLocation := db.FindKeyPosition(req.key)
+				if keyLocation == nil {
+					req.response <- readResponse{"", ErrNotFound}
+					continue
+				}
+				value, err := keyLocation.chunk.GetFromDataSegment(keyLocation.location)
+				req.response <- readResponse{value, err}
+			}
+		}()
+	}
 }

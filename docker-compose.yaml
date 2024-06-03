@@ -8,13 +8,27 @@ services:
   balancer:
     build: .
     command: "lb"
+    depends_on:
+      - db
     networks:
       - servers
     ports:
       - "8090:8090"
 
+  db:
+    build: .
+    command: "db"
+    networks:
+      - servers
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./db_data:/opt/practice-4/db_data
+
   server1:
     build: .
+    depends_on:
+      - db
     networks:
       - servers
     ports:
@@ -22,6 +36,8 @@ services:
 
   server2:
     build: .
+    depends_on:
+      - db
     networks:
       - servers
     ports:
@@ -29,6 +45,8 @@ services:
 
   server3:
     build: .
+    depends_on:
+      - db
     networks:
       - servers
     ports:

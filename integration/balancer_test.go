@@ -33,7 +33,7 @@ func TestBalancer(t *testing.T) {
 
 	servers := map[string]bool{}
 	for i := 0; i < 10; i++ {
-		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=QuantumGurus", baseAddress))
 		if err != nil {
 			t.Error(err)
 		}
@@ -50,7 +50,7 @@ func TestBalancer(t *testing.T) {
 
 func BenchmarkBalancer(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=QuantumGurus", baseAddress))
 		if err != nil {
 			b.Error(err)
 		}
@@ -68,7 +68,7 @@ func TestLoadBalancerMultipleServers(t *testing.T) {
 	serverResponses := make(map[string]bool)
 
 	for i := 0; i < 10; i++ {
-		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=QuantumGurus", baseAddress))
 		if err != nil {
 			t.Fatalf("Failed to send request to load balancer: %v", err)
 		}
